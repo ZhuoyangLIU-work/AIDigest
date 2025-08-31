@@ -84,16 +84,16 @@ DEFAULT_SOURCES: Dict[str, Dict[str, Any]] = {
         "tags": ["university", "stanford"],
     },
     "berkeley_bair": {
-        "kind": "rss",
+        "kind": "rss_or_scrape",
         "label": "Berkeley BAIR Blog",
-        "url": "https://bair.berkeley.edu/blog/feed/",
+        "url": "https://bair.berkeley.edu/blog/",
         "home": "https://bair.berkeley.edu/blog/",
         "tags": ["university", "berkeley"],
     },
     "mit_csail_news": {
-        "kind": "rss",
+        "kind": "rss_or_scrape",
         "label": "MIT News – CSAIL topic",
-        "url": "https://news.mit.edu/topic/computer-science-and-artificial-intelligence-laboratory-csail/rss",
+        "url": "https://news.mit.edu/topic/computer-science-and-artificial-intelligence-laboratory-csail",
         "home": "https://news.mit.edu/topic/computer-science-and-artificial-intelligence-laboratory-csail",
         "tags": ["university", "mit"],
     },
@@ -111,6 +111,14 @@ DEFAULT_SOURCES: Dict[str, Dict[str, Any]] = {
         "home": "https://princeton-nlp.github.io/blog/",
         "tags": ["university", "princeton"],
     },
+    # Stanford HAI (research news)
+    "stanford_hai_news": {
+        "kind": "rss_or_scrape",
+        "label": "Stanford HAI — Research News",
+        "url": "https://hai.stanford.edu/news/research",
+        "home": "https://hai.stanford.edu/news/research",
+        "tags": ["university", "stanford", "hai"],
+    },
 
     # Companies / institutes
     "openai_news": {
@@ -121,9 +129,9 @@ DEFAULT_SOURCES: Dict[str, Dict[str, Any]] = {
         "tags": ["company", "openai"],
     },
     "google_ai_blog": {
-        "kind": "rss",
+        "kind": "rss_or_scrape",
         "label": "Google Blog – AI",
-        "url": "https://blog.google/rss/technology/ai/",
+        "url": "https://blog.google/technology/ai/",
         "home": "https://blog.google/technology/ai/",
         "tags": ["company", "google"],
     },
@@ -155,13 +163,29 @@ DEFAULT_SOURCES: Dict[str, Dict[str, Any]] = {
         "home": "https://x.ai/news",
         "tags": ["company", "xai"],
     },
+    # Meta FAIR — blog
+    "meta_fair_blog": {
+        "kind": "rss_or_scrape",
+        "label": "Meta FAIR — Blog",
+        "url": "https://ai.facebook.com/blog/",
+        "home": "https://ai.facebook.com/blog/",
+        "tags": ["company", "fair", "meta"],
+    },
 }
 
 # ------------------------------------------------------------------------------
 # Utilities & lightweight RSS/Atom parsing
 # ------------------------------------------------------------------------------
 
-HEADERS = {"User-Agent": "ai-research-digest-agent/1.2 (+https://example.org)"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/127.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 class FetchError(Exception):
     pass
@@ -178,7 +202,14 @@ def parse_date(dt_str: Optional[str]) -> Optional[datetime]:
     if not dt_str:
         return None
     try:
-        return dateparse.parse(dt_str)
+        dt = dateparse.parse(dt_str)
+        if not dt:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
     except Exception:
         return None
 
@@ -198,6 +229,7 @@ class Item:
 
 ORG_MAP = {
     "stanford_sail": "stanford",
+    "stanford_hai_news": "stanford",
     "berkeley_bair": "berkeley",
     "mit_csail_news": "mit",
     "cmu_ml_blog": "cmu",
@@ -208,6 +240,7 @@ ORG_MAP = {
     "anthropic_news": "anthropic",
     "microsoft_research_blog": "microsoft",
     "xai_news": "xai",
+    "meta_fair_blog": "fair",
     # external provider tags
     "fair": "fair",
 }
@@ -369,15 +402,19 @@ def fetch_anthropic(source_key: str, url: str) -> List[Item]:
 def fetch_openai_news(source_key: str, url: str) -> List[Item]:
     r = http_get(url)
     soup = BeautifulSoup(r.text, "html.parser")
-    cards = soup.select("a[href^='/news/']")
+    # Target article card anchors only within main content
+    main = soup.find("main") or soup
+    cards = main.select("a[href^='/news/']")
     items: List[Item] = []; seen = set()
     for a in cards:
         href = a.get("href")
-        if not href or href in seen:
+        if not href or href in seen or href.rstrip("/") == "/news":
+            continue
+        title = a.get_text(" ", strip=True)
+        if not title or len(title) < 6:
             continue
         seen.add(href)
         link = href if href.startswith("http") else "https://openai.com" + href
-        title = a.get_text(" ", strip=True) or "OpenAI News"
         items.append(Item(source=source_key, title=title, url=link, published=None,
                           summary="", content="", org=ORG_MAP[source_key]))
     return items
@@ -386,15 +423,38 @@ def fetch_openai_news(source_key: str, url: str) -> List[Item]:
 def fetch_xai(source_key: str, url: str) -> List[Item]:
     r = http_get(url)
     soup = BeautifulSoup(r.text, "html.parser")
-    cards = soup.select("a[href^='/news/'], a[href^='/blog/']")
+    main = soup.find("main") or soup
+    cards = main.select("a[href^='/news/'], a[href^='/blog/']")
     items: List[Item] = []; seen = set()
     for a in cards:
         href = a.get("href")
-        if not href or href in seen:
+        if not href or href in seen or href.rstrip("/") in ("/news", "/blog"):
+            continue
+        title = a.get_text(" ", strip=True)
+        if not title or len(title) < 6:
             continue
         seen.add(href)
         link = href if href.startswith("http") else "https://x.ai" + href
-        title = a.get_text(" ", strip=True) or "xAI News"
+        items.append(Item(source=source_key, title=title, url=link, published=None,
+                          summary="", content="", org=ORG_MAP[source_key]))
+    return items
+
+def fetch_meta_fair(source_key: str, url: str) -> List[Item]:
+    r = http_get(url)
+    soup = BeautifulSoup(r.text, "html.parser")
+    main = soup.find("main") or soup
+    # FAIR blog posts typically under /blog/slug
+    cards = main.select("a[href^='/blog/']")
+    items: List[Item] = []; seen = set()
+    for a in cards:
+        href = a.get("href")
+        if not href or href in seen or href.rstrip("/") == "/blog":
+            continue
+        title = a.get_text(" ", strip=True)
+        if not title or len(title) < 6:
+            continue
+        seen.add(href)
+        link = href if href.startswith("http") else "https://ai.facebook.com" + href
         items.append(Item(source=source_key, title=title, url=link, published=None,
                           summary="", content="", org=ORG_MAP[source_key]))
     return items
@@ -410,6 +470,16 @@ THEME_REGEX = [
     ("Safety/Alignment", r"\b(safety|alignment|harms|red team|eval|jailbreak|RSP)\b"),
     ("Theory", r"\b(generalization|sample complexity|theory|bounds|proof|approximation)\b"),
 ]
+
+# Broad AI/ML keyword filter for relevance checks
+AI_FILTER_REGEX = re.compile(
+    r"\b(artificial intelligence|ai|machine learning|ml|deep learning|neural|neuron|transformer|attention|llm|language model|gpt|bert|clip|diffusion|vision|computer vision|reinforcement learning|rl|policy gradient|self[- ]?supervised|contrastive|embedding|token|inference|fine[- ]?tune|prompt|alignment|safety|reasoning|chain[- ]?of[- ]?thought|cot|multimodal|vlm|speech recognition|nlp|natural language processing|large language model)\b",
+    flags=re.I,
+)
+
+def is_relevant_item(it: Item) -> bool:
+    text = f"{it.title} {it.summary} {it.content}"[:5000]
+    return bool(AI_FILTER_REGEX.search(text))
 
 def within_window(item: Item, since: datetime) -> bool:
     # Always include items with no publish date; otherwise enforce date window
@@ -712,18 +782,22 @@ class Grouper:
         elif _HAS_SKLEARN and DBSCAN is not None:
             labels = DBSCAN(eps=0.3, min_samples=2, metric='euclidean').fit_predict(X)  # type: ignore
         else:
-            # No clustering libs: simple theme bucketing
+            # No clustering libs: simple theme bucketing by theme label
             labels = -1 * np.ones(len(items), dtype=int)
+            theme_to_label: Dict[str, int] = {}
             next_lbl = 0
             for i, it in enumerate(items):
-                assigned = False
+                text = it.title + " " + (it.summary or it.content)
+                found_theme: Optional[str] = None
                 for theme, rx in THEME_REGEX:
-                    if re.search(rx, (it.title + " " + (it.summary or it.content)), flags=re.I):
-                        labels[i] = next_lbl
-                        assigned = True
+                    if re.search(rx, text, flags=re.I):
+                        found_theme = theme
                         break
-                if assigned:
-                    next_lbl += 1
+                if found_theme is not None:
+                    if found_theme not in theme_to_label:
+                        theme_to_label[found_theme] = next_lbl
+                        next_lbl += 1
+                    labels[i] = theme_to_label[found_theme]
         clusters: Dict[int, List[int]] = {}
         for i, lbl in enumerate(labels):
             clusters.setdefault(int(lbl), []).append(i)
@@ -768,8 +842,50 @@ def summarize_text_extractive(text: str, sentences: int = 5) -> str:
     sents = _simple_sentence_split(text)
     return " ".join(sents[:max(1, sentences)])
 
+def _hashing_embed_sents(sents: List[str], dim: int = 1024) -> np.ndarray:
+    M = np.zeros((len(sents), dim), dtype=float)
+    for i, t in enumerate(sents):
+        for w in re.findall(r"[a-z]{2,}", t.lower()):
+            h = hash(w) % dim
+            M[i, h] += 1.0
+        n = np.linalg.norm(M[i]) or 1.0
+        M[i] /= n
+    return M
+
+def summarize_text_textrank(text: str, max_sentences: int = 6) -> str:
+    sents = _simple_sentence_split(text)
+    if not sents:
+        return ""
+    if len(sents) <= max_sentences:
+        return " ".join(sents)
+    try:
+        if _HAS_SKLEARN and TfidfVectorizer is not None:
+            vec = TfidfVectorizer(max_features=4096, ngram_range=(1,2), stop_words='english')
+            X = vec.fit_transform(sents).toarray()
+        else:
+            X = _hashing_embed_sents(sents, dim=1024)
+    except Exception:
+        X = _hashing_embed_sents(sents, dim=1024)
+    eps = 1e-8
+    norms = np.linalg.norm(X, axis=1, keepdims=True) + eps
+    Xn = X / norms
+    S = np.clip(Xn @ Xn.T, 0.0, 1.0)
+    np.fill_diagonal(S, 0.0)
+    row_sums = S.sum(axis=1, keepdims=True) + eps
+    P = S / row_sums
+    N = S.shape[0]
+    d = 0.85
+    r = np.full((N,), 1.0 / N)
+    for _ in range(30):
+        r = d * (P.T @ r) + (1 - d) / N
+    idxs = np.argsort(-r)[:max_sentences]
+    idxs_sorted = sorted(idxs.tolist())
+    return " ".join([sents[i] for i in idxs_sorted])
+
 def summarize_items(items: List[Item], method: str = "textrank", llm_cfg: Optional[LLMConfig] = None) -> str:
     joined = "\n\n".join([f"- {it.title}: {it.summary or it.content}" for it in items])
+    if method == "textrank":
+        return summarize_text_textrank(joined, max_sentences=6)
     if method != "llm" or llm_cfg is None:
         return summarize_text_extractive(joined, sentences=6)
     prov = (llm_cfg.provider or "openai").lower()
@@ -839,7 +955,7 @@ def make_digest(items: List[Item], clusters: Dict[int, List[int]], grouper: Grou
         group_items = [items[i] for i in idxs]
         header = grouper.label_cluster(items, idxs) if lbl != -1 else "Miscellaneous / Singles"
         lines.append(f"## {header}\n")
-        for it in sorted(group_items, key=lambda x: (x.published or datetime(1970,1,1)), reverse=True):
+        for it in sorted(group_items, key=lambda x: (x.published or datetime(1970,1,1,tzinfo=timezone.utc)), reverse=True):
             date_str = it.published.strftime("%Y-%m-%d") if it.published else "undated"
             lines.append(f"- **{it.title}** ({it.org}{' · '+date_str if date_str else ''}) — {it.url}")
         summary = summarize_items(group_items, method=summarizer, llm_cfg=llm_cfg)
@@ -862,7 +978,8 @@ def load_sources(yaml_path: Optional[str]) -> Dict[str, Dict[str, Any]]:
 
 
 def fetch_all(sources: Dict[str, Dict[str, Any]], max_per_source: int, since_days: int,
-              org_filter: Optional[List[str]] = None, enrich: bool = True) -> List[Item]:
+              org_filter: Optional[List[str]] = None, enrich: bool = True,
+              ai_only: bool = False) -> List[Item]:
     since = datetime.now(timezone.utc) - timedelta(days=since_days)
     out: List[Item] = []
     for key, cfg in sources.items():
@@ -882,6 +999,8 @@ def fetch_all(sources: Dict[str, Dict[str, Any]], max_per_source: int, since_day
                 items = fetch_openai_news(key, url)
             elif key == "xai_news":
                 items = fetch_xai(key, url)
+            elif key == "meta_fair_blog":
+                items = fetch_meta_fair(key, url)
             elif kind == "rss":
                 items = fetch_rss(key, url)
             else:
@@ -903,7 +1022,8 @@ def fetch_all(sources: Dict[str, Dict[str, Any]], max_per_source: int, since_day
                             continue
                         if href.startswith("/"):
                             href = url.rstrip("/") + href
-                        if href.startswith("http"):
+                        # For generic fallback, prefer blog/news/research paths
+                        if href.startswith("http") and (not ai_only or re.search(r"/(blog|news|research|article)/", href)):
                             items.append(Item(source=key, title=title, url=href, published=None, summary="", content="", org=org))
             # window and cap per source
             items = [it for it in items if within_window(it, since)]
@@ -1088,6 +1208,13 @@ def main():
     csv_path = os.path.join(args.out, f"ai_research_items_{ts}.csv")
     df.to_csv(csv_path, index=False)
     print(f"[OK] Wrote items CSV: {csv_path}")
+
+    # Final coverage summary by org
+    by_org: Dict[str, int] = {}
+    for it in items:
+        by_org[it.org] = by_org.get(it.org, 0) + 1
+    org_line = ", ".join(f"{k}:{v}" for k, v in sorted(by_org.items()))
+    print(f"[SUMMARY] Items by org: {org_line}")
 
 if __name__ == "__main__":
     main()
