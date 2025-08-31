@@ -604,14 +604,17 @@ def fetch_openreview_recent(since_days: int = 7, limit: int = 200) -> List[Item]
     return items
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
-def fetch_scholar_serpapi(since_days: int = 7, per_org: int = 10, serpapi_key: Optional[str] = None) -> List[Item]:
+def fetch_scholar_serpapi(since_days: int = 7, per_org: int = 10, serpapi_key: Optional[str] = None, ai_only: bool = False) -> List[Item]:
     key = serpapi_key or os.getenv("SERPAPI_API_KEY")
     if not key:
         return []
     year_low = datetime.now().year if since_days <= 365 else datetime.now().year - 1
     items: List[Item] = []
     for org, kws in AFFIL_KEYWORDS.items():
-        q = f"{kws[0]} artificial intelligence"
+        base_q = f"{kws[0]} artificial intelligence"
+        if ai_only:
+            base_q += " OR (machine learning) OR (deep learning) OR (transformer) OR (neural)"
+        q = base_q
         params = {"engine": "google_scholar", "q": q, "as_ylo": year_low, "num": per_org, "api_key": key}
         try:
             r = requests.get("https://serpapi.com/search", params=params, timeout=30)
@@ -629,8 +632,11 @@ def fetch_scholar_serpapi(since_days: int = 7, per_org: int = 10, serpapi_key: O
                 except Exception:
                     year = None
                 pub_dt = datetime(year, 1, 1, tzinfo=timezone.utc) if year else None
-                items.append(Item(source="scholar_serpapi", title=title, url=link, published=pub_dt,
-                                  summary=snippet[:1200], content=snippet[:4000], org=org))
+                item = Item(source="scholar_serpapi", title=title, url=link, published=pub_dt,
+                            summary=snippet[:1200], content=snippet[:4000], org=org)
+                if ai_only and not is_relevant_item(item):
+                    continue
+                items.append(item)
         except Exception:
             continue
     return items
@@ -676,14 +682,16 @@ def fetch_arxiv_recent(since_days: int = 7, max_results: int = 200, categories: 
         return []
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
-def fetch_crossref_recent(since_days: int = 7, per_org: int = 50) -> List[Item]:
+def fetch_crossref_recent(since_days: int = 7, per_org: int = 50, ai_only: bool = False) -> List[Item]:
     base = "https://api.crossref.org/works"
     since_dt = (datetime.utcnow() - timedelta(days=since_days)).date().isoformat()
     items: List[Item] = []
     for org, kws in AFFIL_KEYWORDS.items():
         qaff = kws[0]
         params = {"rows": per_org, "filter": f"from-pub-date:{since_dt}", "query.affiliation": qaff,
-                  "select": "title,URL,issued,abstract", "sort": "issued", "order": "desc"}
+                  "select": "title,URL,issued,abstract,subject,type", "sort": "issued", "order": "desc"}
+        if ai_only:
+            params["query.bibliographic"] = "artificial intelligence OR machine learning OR deep learning OR neural OR transformer OR language model"
         try:
             r = requests.get(base, params=params, timeout=30)
             if not r.ok:
@@ -699,14 +707,17 @@ def fetch_crossref_recent(since_days: int = 7, per_org: int = 50) -> List[Item]:
                     pub = datetime(int(y), int(m), int(d), tzinfo=timezone.utc)
                 abstract = it.get("abstract") or ""
                 txt = BeautifulSoup(abstract, "html.parser").get_text(" ")
-                items.append(Item(source="crossref", title=title, url=link, published=pub,
-                                  summary=txt[:1200], content=txt[:4000], org=org))
+                item = Item(source="crossref", title=title, url=link, published=pub,
+                            summary=txt[:1200], content=txt[:4000], org=org)
+                if ai_only and not is_relevant_item(item):
+                    continue
+                items.append(item)
         except Exception:
             continue
     return items
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
-def fetch_gdelt_docs(since_days: int = 7, per_org: int = 30) -> List[Item]:
+def fetch_gdelt_docs(since_days: int = 7, per_org: int = 30, ai_only: bool = False) -> List[Item]:
     base = "https://api.gdeltproject.org/api/v2/doc/doc"
     timespan = f"d{since_days}"
     items: List[Item] = []
@@ -714,6 +725,8 @@ def fetch_gdelt_docs(since_days: int = 7, per_org: int = 30) -> List[Item]:
         if not doms:
             continue
         q = " OR ".join([f"site:{d}" for d in doms]) + " AND (AI OR \"artificial intelligence\")"
+        if ai_only:
+            q += " OR (\"machine learning\") OR (\"deep learning\") OR (transformer) OR (neural) OR (\"language model\")"
         params = {"query": q, "timespan": timespan, "format": "json", "maxrecords": per_org, "sort": "datedesc"}
         try:
             r = requests.get(base, params=params, timeout=30)
@@ -725,8 +738,11 @@ def fetch_gdelt_docs(since_days: int = 7, per_org: int = 30) -> List[Item]:
                 link = d.get("url") or ""
                 dt = parse_date(d.get("seendate"))
                 snippet = d.get("snippet") or ""
-                items.append(Item(source="gdelt", title=title, url=link, published=dt,
-                                  summary=snippet[:1200], content=snippet[:4000], org=org))
+                item = Item(source="gdelt", title=title, url=link, published=dt,
+                            summary=snippet[:1200], content=snippet[:4000], org=org)
+                if ai_only and not is_relevant_item(item):
+                    continue
+                items.append(item)
         except Exception:
             continue
     return items
@@ -1114,6 +1130,7 @@ def main():
     ap.add_argument("--emit-sources-template", action="store_true", help="Write an example YAML of lab publication pages and exit")
     ap.add_argument("--no-enrich", action="store_true", help="Skip fetching article body/date from item URLs")
     ap.add_argument("--selftest", action="store_true", help="Run internal parser tests and exit")
+    ap.add_argument("--filter-ai-only", action="store_true", help="Filter collected items to AI/ML-related topics only")
     args = ap.parse_args()
 
     if args.selftest:
@@ -1152,7 +1169,7 @@ def main():
 
     org_filter = [s.strip().lower() for s in (args.orgs or "").split(',') if s.strip()] or None
 
-    items = fetch_all(sources, max_per_source=args.max_per_source, since_days=args.days, org_filter=org_filter, enrich=not args.no_enrich)
+    items = fetch_all(sources, max_per_source=args.max_per_source, since_days=args.days, org_filter=org_filter, enrich=not args.no_enrich, ai_only=args.filter_ai_only)
 
     # Optional external providers
     if args.include_openreview:
@@ -1162,7 +1179,7 @@ def main():
             print(f"[WARN] OpenReview fetch failed: {e}")
     if args.include_scholar:
         try:
-            items.extend(fetch_scholar_serpapi(since_days=args.days, per_org=10, serpapi_key=(args.serpapi_key or None)))
+            items.extend(fetch_scholar_serpapi(since_days=args.days, per_org=10, serpapi_key=(args.serpapi_key or None), ai_only=args.filter_ai_only))
         except Exception as e:
             print(f"[WARN] Scholar fetch failed: {e}")
     if args.include_arxiv:
@@ -1172,12 +1189,12 @@ def main():
             print(f"[WARN] arXiv fetch failed: {e}")
     if args.include_crossref:
         try:
-            items.extend(fetch_crossref_recent(since_days=args.days, per_org=60))
+            items.extend(fetch_crossref_recent(since_days=args.days, per_org=60, ai_only=args.filter_ai_only))
         except Exception as e:
             print(f"[WARN] Crossref fetch failed: {e}")
     if args.include_gdelt:
         try:
-            items.extend(fetch_gdelt_docs(since_days=args.days, per_org=30))
+            items.extend(fetch_gdelt_docs(since_days=args.days, per_org=30, ai_only=args.filter_ai_only))
         except Exception as e:
             print(f"[WARN] GDELT fetch failed: {e}")
 
@@ -1186,6 +1203,8 @@ def main():
         return
 
     items = dedup(items)
+    if args.filter_ai_only:
+        items = [it for it in items if is_relevant_item(it)]
 
     grouper = Grouper()
     clusters = grouper.cluster(items)
