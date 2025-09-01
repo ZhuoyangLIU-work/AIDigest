@@ -604,13 +604,17 @@ def fetch_openreview_recent(since_days: int = 7, limit: int = 200) -> List[Item]
     return items
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
-def fetch_scholar_serpapi(since_days: int = 7, per_org: int = 10, serpapi_key: Optional[str] = None, ai_only: bool = False) -> List[Item]:
+def fetch_scholar_serpapi(since_days: int = 7, per_org: int = 10, serpapi_key: Optional[str] = None, ai_only: bool = False, org_limit: Optional[int] = None) -> List[Item]:
     key = serpapi_key or os.getenv("SERPAPI_API_KEY")
     if not key:
         return []
     year_low = datetime.now().year if since_days <= 365 else datetime.now().year - 1
     items: List[Item] = []
-    for org, kws in AFFIL_KEYWORDS.items():
+    items: List[Item] = []
+    pairs = list(AFFIL_KEYWORDS.items())
+    if org_limit is not None:
+        pairs = pairs[: max(0, int(org_limit))]
+    for org, kws in pairs:
         base_q = f"{kws[0]} artificial intelligence"
         if ai_only:
             base_q += " OR (machine learning) OR (deep learning) OR (transformer) OR (neural)"
@@ -1123,6 +1127,7 @@ def main():
     ap.add_argument("--sources-yaml", type=str, default="", help="Optional YAML to extend/override sources")
     ap.add_argument("--include-openreview", action="store_true", help="Also fetch OpenReview and filter by target affiliations")
     ap.add_argument("--include-scholar", action="store_true", help="Also query Google Scholar via SerpAPI (set SERPAPI_API_KEY)")
+    ap.add_argument("--scholar-orgs-limit", type=int, default=12, help="Max orgs to query on Scholar per run (one API call per org)")
     ap.add_argument("--serpapi-key", type=str, default="", help="Optional SerpAPI key (or set SERPAPI_API_KEY)")
     ap.add_argument("--include-arxiv", action="store_true", help="Also fetch arXiv (filtered by affiliations when available)")
     ap.add_argument("--include-crossref", action="store_true", help="Also fetch Crossref by affiliation")
@@ -1179,7 +1184,7 @@ def main():
             print(f"[WARN] OpenReview fetch failed: {e}")
     if args.include_scholar:
         try:
-            items.extend(fetch_scholar_serpapi(since_days=args.days, per_org=10, serpapi_key=(args.serpapi_key or None), ai_only=args.filter_ai_only))
+            items.extend(fetch_scholar_serpapi(since_days=args.days, per_org=10, serpapi_key=(args.serpapi_key or None), ai_only=args.filter_ai_only, org_limit=args.scholar_orgs_limit))
         except Exception as e:
             print(f"[WARN] Scholar fetch failed: {e}")
     if args.include_arxiv:

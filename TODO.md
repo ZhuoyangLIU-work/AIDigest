@@ -30,6 +30,17 @@ Proposals
 - Summaries:
   - Use LLM summaries when `OPENAI_API_KEY` (or Anthropic/Groq) is available; keep `--max-tokens` modest (400–700).
 
+LLM Summary Budgeting
+---------------------
+- Default policy: scheduled workflow uses extractive summaries; enable LLM only for manual/promoted runs.
+- If enabling LLM on schedule, consider the following budget controls:
+  - Lower token cap: set `--max-tokens` to 300–500 per cluster.
+  - Cheaper models: keep `--llm-provider openai --llm-model gpt-4o-mini` (or equivalent cost‑efficient models).
+  - Scope reduction: summarize only top K clusters (e.g., 5–8) by size/recency; or limit items per cluster.
+  - Per‑run token budget: introduce an env var (e.g., `LLM_BUDGET_TOKENS`) and compute per‑cluster allowance dynamically; fall back to extractive when exceeded.
+  - Add a CLI guard (future): `--llm-budget-tokens N` to bound total tokens for the run.
+  - Logging: record approximate token usage per run/cluster into a CSV alongside digests for visibility.
+
 Options
 -------
 - Strict AI filtering (recommended for noise reduction):
@@ -57,4 +68,3 @@ Handy Commands
   - `python Ai-digest-agent.py --days 7 --out digests --include-openreview --include-arxiv --include-crossref --include-gdelt --include-scholar --filter-ai-only`
 - LLM summaries (requires key):
   - `OPENAI_API_KEY=... python Ai-digest-agent.py --days 7 --out digests --summarizer llm --llm-provider openai --llm-model gpt-4o-mini --max-tokens 700`
-

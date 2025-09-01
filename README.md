@@ -63,6 +63,7 @@ CLI Basics
 - Enrichment: `--no-enrich` to skip fetching article bodies/dates (faster, fewer requests)
 - Summarizer: `--summarizer {textrank|llm}`; `--llm-provider {openai|anthropic|groq}`; `--llm-model`; `--max-tokens`
 - Providers: `--include-{openreview|scholar|arxiv|crossref|gdelt}`
+- Scholar calls per run: `--scholar-orgs-limit N` (default 12; ~1 SerpAPI request per org)
 - Sources: `--sources-yaml PATH` to extend/override; `--emit-sources-template` to write an example YAML
 - Filter: `--filter-ai-only` to drop items weakly related to AI/ML
 - Selftest: `--selftest` (no network)
@@ -84,7 +85,7 @@ python Ai-digest-agent.py \
   --days 7 --out digests --max-per-source 40 \
   --include-openreview --include-arxiv --include-crossref --include-gdelt --include-scholar \
   --summarizer llm --llm-provider openai --llm-model gpt-4o-mini --max-tokens 700 \
-  --filter-ai-only
+  --filter-ai-only --scholar-orgs-limit 12
 ```
 
 Outputs
