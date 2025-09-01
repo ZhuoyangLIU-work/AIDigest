@@ -92,6 +92,20 @@ Outputs
 - Markdown digest and CSV index under `./digests/` with timestamped filenames.
 - A brief per-organization coverage summary prints at the end of the run.
 
+GitHub Pages & Schedule
+-----------------------
+- This repo includes a workflow at `.github/workflows/digest.yml` that:
+  - Runs every 3 days (and on manual dispatch).
+  - Builds digests with `--days 3 --no-enrich --filter-ai-only`.
+  - Publishes a static site with digests to GitHub Pages.
+- To enable:
+  1) In GitHub repo Settings → Pages, ensure Source is set to “GitHub Actions”.
+  2) (Optional) Add secrets for better coverage:
+     - `SERPAPI_API_KEY` (Scholar provider)
+     - `OPENAI_API_KEY` (LLM summarizer)
+     - `HTTP_PROXY` / `HTTPS_PROXY` if your network requires it
+  3) Trigger the workflow via the Actions tab (or wait for the schedule).
+
 Extending Sources
 -----------------
 - Write a template of common lab publication pages:
